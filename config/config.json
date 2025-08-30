@@ -1,0 +1,11 @@
+{
+  "OPENAI_API_KEY": "",
+  "PROJECT_ROOT": ["/Users/prathameshspai/IdeaProjects/AI-SDET_APITests"],
+  "LLM_MODEL": "gpt-4o-mini",
+  "AUTOMATION_SUITE_CMD": [
+    "mvn",
+    "-q",
+    "-Dtest={test_selector}",
+    "test"
+  ]
+}
