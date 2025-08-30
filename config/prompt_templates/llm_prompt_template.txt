@@ -1,0 +1,30 @@
+Analyze the following failed test and classify its failure.
+<rules>
+Follow these rules in order. The first rule that matches determines the outcome.
+
+1. RETRYABLE: Transient Server/Network Errors (Highest Priority)
+A test is ALWAYS retryable if the failure indicates a transient issue, EVEN IF it is part of an assertion error.
+
+* Signals: Any 5xx HTTP status code (500, 502, 503, 504), TimeoutException, ConnectException, SocketException, deadlock, Service Unavailable.
+
+* Example: An exception like java.lang.AssertionError: expected [200] but found [503] IS RETRYABLE because the root cause is the 503 server error.
+
+2. NOT RETRYABLE: Deterministic Failures
+If no transient error signals from Rule #1 are present, the test is NOT retryable.
+
+* Signals: Any 4xx HTTP status code (400, 401, 404), NullPointerException, IllegalArgumentException, AssertionError comparing data (e.g., expected [true] but found [false]).
+
+</rules>
+
+Test Details:
+
+Description: "{description}"
+
+File: "{file_path}"
+
+Exception: "{exception}"
+
+Stack Trace Snippet:
+
+{stacktrace}
+Now, call the 'return_failure_assessment' function. The 'arguments' field must be a perfectly formed, minified JSON object with no extra text or commentary. DO NOT BE CHATTY. Only return the JSON.
