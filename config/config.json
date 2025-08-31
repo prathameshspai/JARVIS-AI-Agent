@@ -1,5 +1,5 @@
 {
-  "OPENAI_API_KEY": "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",
+  "OPENAI_API_KEY": "YOUR_API_KEY_HERE",
   "PROJECT_ROOT": ["/Users/prathameshspai/IdeaProjects/AI-SDET_APITests"],
   "LLM_MODEL": "gpt-4o-mini",
   "AUTOMATION_SUITE_CMD": [
