@@ -3,7 +3,7 @@ import sys
 import re
 import json
 import hashlib
-import subprocess
+import subprocess #running shell commands (Retrying tests)
 from typing import Tuple, List, Dict, Any
 import litellm
 from pprint import pprint
@@ -11,59 +11,37 @@ from pprint import pprint
 # ========================
 # Config / Setup
 # ========================
-def load_config(path: str = "config/config.json") -> Dict[str, Any]:
-    """Loads configuration from a JSON file."""
-    if not os.path.exists(path):
-        print(f"Warning: Config file not found at {path}. Using defaults.")
-        return {}
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        print(f"Error: Could not decode JSON from {path}.")
-        return {}
-
-CONFIG = load_config()
-# Set the API key for the language model library
-litellm.api_key = CONFIG.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
-if not litellm.api_key:
-    print("FATAL: OpenAI API key not found in config/config.json or environment variables.")
-    sys.exit(1)
-
-# --- Project and Command Configuration ---
-raw_project_root = CONFIG.get("PROJECT_ROOT", os.getcwd())
-
-# Handle cases where the config might mistakenly wrap the path in a list.
-if isinstance(raw_project_root, list) and raw_project_root:
-    PROJECT_ROOT = raw_project_root[0]
-else:
-    PROJECT_ROOT = raw_project_root
-
-# Final check to ensure PROJECT_ROOT is a valid string path.
-if not isinstance(PROJECT_ROOT, str) or not os.path.isdir(PROJECT_ROOT):
-    print(f"Warning: PROJECT_ROOT '{PROJECT_ROOT}' is not a valid directory. Defaulting to the current directory.")
-    PROJECT_ROOT = os.getcwd()
-
-print(f"✅ Project root configured to: {PROJECT_ROOT}")
-
-# Default command to retry a single TestNG test method
-DEFAULT_CMD = ["mvn", "-q", f"-Dtest={{test_selector}}", "test"]
-AUTOMATION_SUITE_CMD: List[str] = CONFIG.get("AUTOMATION_SUITE_CMD", DEFAULT_CMD)
-LLM_MODEL = CONFIG.get("LLM_MODEL", "gpt-4o-mini")
-
-# --- Import the custom JSON log reader ---
+# --- Import custom modules ---
 try:
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    # Add project root to path to ensure local modules can be found
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.append(current_dir)
+    from core.config_loader import AppConfig
     from core.log_reader import read_log
 except ImportError as e:
-    print(f"FATAL: Could not import 'core.log_reader.read_log'. Ensure PYTHONPATH is set correctly. Details: {e}")
+    print(f"FATAL: Could not import a core module. Details: {e}")
+    sys.exit(1)
+
+# --- Initialize Configuration ---
+try:
+    config = AppConfig()
+    litellm.api_key = config.api_key
+    
+    # Define constants from the config object for easy access in this script
+    PROJECT_ROOT = config.project_root
+    AUTOMATION_SUITE_CMD = config.automation_suite_cmd
+    LLM_MODEL = config.llm_model
+
+    print(f"✅ Project root configured to: {PROJECT_ROOT}")
+
+except ValueError as e:
+    print(f"FATAL: {e}")
     sys.exit(1)
 
 # ========================
 # Agent State
 # ========================
-# This simple dictionary holds data between tool calls, preventing the need to
-# pass large JSON blobs back and forth with the LLM.
+# Stores failed test info, categorized results, and final retry outcomes.
 AGENT_STATE = {}
 
 # ========================
@@ -80,9 +58,14 @@ LLM_CLASSIFY_TOOL = [{
                 "category": {
                     "type": "string",
                     "enum": [
-                        "Assertion Failure", "Environment Issue", "Network Error",
-                        "Application Logic Error", "Test Data Issue",
-                        "Timeout or Sync Issue", "Unknown"
+                            "Assertion Failure",
+                            "Test Data Issue",
+                            "Application Logic Error",
+                            "Environment Configuration Issue",
+                            "Network or Connectivity Issue",
+                            "Timeout or Synchronization Issue",
+                            "Dependency or Service Unavailable",
+                            "Unknown"
                     ]
                 },
                 "retryable": {"type": "boolean", "description": "True if the test failure is transient and might pass on a retry."},
@@ -118,6 +101,7 @@ def _create_classification_prompt(test: Dict[str, Any]) -> str:
     A test is ALWAYS retryable if the failure indicates a transient issue, EVEN IF it is part of an assertion error.
     - **Signals**: Any `5xx` HTTP status code (500, 502, 503, 504), `TimeoutException`, `ConnectException`, `SocketException`, `deadlock`, `Service Unavailable`.
     - **Example**: An exception like `java.lang.AssertionError: expected [200] but found [503]` IS RETRYABLE because the root cause is the `503` server error.
+    - Also consider retryable if the exception message contains natural language hints of transient issues, e.g., "timed out", "temporarily unavailable", "connection reset", "could not connect to server", "sync issue", etc.
 
     2.  **NOT RETRYABLE: Deterministic Failures**
     If no transient error signals from Rule #1 are present, the test is NOT retryable.
@@ -295,19 +279,13 @@ def tool_retry_tests(max_retries) -> str:
     return summary
 
 def tool_terminate(message: str) -> str:
-    """Tool: A final function to end the execution loop."""
     print(f"\n🏁 Agent is terminating. Reason: {message}")
     # You could add final reporting here using AGENT_STATE['final_results']
     return message
 
 def _write_final_results_to_json(input_path: str, output_path: str):
-    """
-    Copies the input JSON file to a new location and updates the status of
-    tests that passed on retry using a reliable matching method.
-    """
     print(f"\n📝 Writing final results to {output_path}...")
     try:
-        # Load the original test results from the input file
         with open(input_path, 'r') as f:
             original_data = json.load(f)
 
@@ -390,7 +368,7 @@ if __name__ == "__main__":
             "type": "function", "function": {
                 "name": "retry_tests",
                 "description": "Retry tests previously marked as 'retryable' and update their status.",
-                "parameters": {"type": "object", "properties": {"max_retries": {"type": "integer", "default": 1}}, "required": []}
+                "parameters": {"type": "object", "properties": {"max_retries": {"type": "integer", "default": 3}}, "required": []}
             }
         },
         {
